@@ -150,19 +150,19 @@ class RunDailyCheckTests(unittest.TestCase):
 
     @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
     @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
-    def test_20d_deadline_alert_fires_once_within_window(self, mock_fetch, mock_send):
-        prazo = (date.today() + timedelta(days=15)).isoformat() + "T09:00:00"
+    def test_30d_deadline_alert_fires_once_within_window(self, mock_fetch, mock_send):
+        prazo = (date.today() + timedelta(days=25)).isoformat() + "T09:00:00"
         item = {**SAMPLE_ITEM, "encerramento_proposta": prazo}
         mock_fetch.return_value = [item]
         import asyncio
 
         result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
-        self.assertEqual(result["alertas_20d"], 1)
+        self.assertEqual(result["alertas_30d"], 1)
         self.assertEqual(result["alertas_5d"], 0)
 
         mock_send.reset_mock()
         result2 = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
-        self.assertEqual(result2["alertas_20d"], 0)
+        self.assertEqual(result2["alertas_30d"], 0)
 
 
 class PainelTests(unittest.TestCase):

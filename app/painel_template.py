@@ -66,14 +66,13 @@ def render_painel(items: list[dict]) -> str:
 
 <div class="controls">
   <input id="busca" type="text" placeholder="Buscar por órgão, objeto ou município...">
-  <select id="filtroUF"><option value="">Todos os estados</option></select>
+  <select id="filtroUF"><option value="">Meus estados (MT/RO)</option><option value="__todos__">Todos os estados</option></select>
   <select id="ordenar">
     <option value="prazo_asc">Prazo mais próximo</option>
     <option value="valor_desc">Maior valor estimado</option>
     <option value="uf">Estado (A-Z)</option>
   </select>
   <button class="quickbtn" id="btnUrgente">Ver só as urgentes (&le;5 dias)</button>
-  <button class="quickbtn" id="btnRO">Ver só Rondônia (RO)</button>
 </div>
 
 <table>
@@ -119,17 +118,14 @@ ufs.forEach(uf => {{
 document.getElementById('cTotal').textContent = DATA.length;
 document.getElementById('cValor').textContent = fmtMoeda(DATA.reduce((s,r)=>s+(r.valor_estimado||0),0));
 document.getElementById('cUF').textContent = ufs.length;
+const MEUS_ESTADOS = ['MT', 'RO'];
+
 document.getElementById('cUrgente').textContent = DATA.filter(r => {{ const d = diasRestantes(r.encerramento_proposta); return d !== null && d >= 0 && d <= 5; }}).length;
 document.getElementById('cRO').textContent = DATA.filter(r => r.uf === 'RO').length;
 
 let soUrgente = false;
-let soRO = false;
 document.getElementById('btnUrgente').addEventListener('click', () => {{
   soUrgente = !soUrgente;
-  render();
-}});
-document.getElementById('btnRO').addEventListener('click', () => {{
-  soRO = !soRO;
   render();
 }});
 
@@ -138,8 +134,8 @@ function render() {{
   const uf = selUF.value;
   const ord = document.getElementById('ordenar').value;
   let rows = DATA.filter(r => {{
-    if (uf && r.uf !== uf) return false;
-    if (soRO && r.uf !== 'RO') return false;
+    if (uf === '') {{ if (!MEUS_ESTADOS.includes(r.uf)) return false; }}
+    else if (uf !== '__todos__' && r.uf !== uf) return false;
     if (soUrgente) {{
       const d = diasRestantes(r.encerramento_proposta);
       if (d === null || d < 0 || d > 5) return false;

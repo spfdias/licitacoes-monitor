@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from . import alerts, db
+from .painel_template import render_painel
 
 app = FastAPI(title="Licitacoes Monitor")
 security = HTTPBasic()
@@ -137,21 +138,5 @@ async def run_now(_: None = Depends(require_login)):
 
 @app.get("/painel", response_class=HTMLResponse)
 def painel(_: None = Depends(require_login)):
-    rows = "".join(
-        f"""<tr>
-            <td>{r['orgao']}</td><td>{r['uf']}/{r['municipio']}</td>
-            <td>{r['objeto'][:120]}{'...' if len(r['objeto']) > 120 else ''}</td>
-            <td>{r['encerramento_proposta'] or '-'}</td>
-            <td>{r['situacao']}</td>
-            <td><a href="{r['link']}" target="_blank">edital</a></td>
-        </tr>"""
-        for r in db.list_all()
-    )
-    body = f"""
-    <p><a href="/dashboard">&laquo; voltar ao dashboard</a></p>
-    <table>
-      <tr><th>Órgão</th><th>UF/Município</th><th>Objeto</th><th>Encerramento</th><th>Situação</th><th>Link</th></tr>
-      {rows}
-    </table>
-    """
-    return _page("Painel de Licitações - TI", body)
+    items = [dict(r) for r in db.list_all()]
+    return HTMLResponse(render_painel(items))

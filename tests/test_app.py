@@ -146,6 +146,19 @@ class RunDailyCheckTests(unittest.TestCase):
         self.assertEqual(result["novas_alertadas"], 0)
 
 
+class PainelTests(unittest.TestCase):
+    def tearDown(self):
+        with db.get_conn() as conn:
+            conn.execute("DELETE FROM licitacoes WHERE numero_controle_pncp = ?", (SAMPLE_ITEM["numero_controle_pncp"],))
+
+    def test_painel_renders_tracked_item(self):
+        db.upsert_licitacao(SAMPLE_ITEM, first_seen_at="2026-07-30T10:00:00")
+        resp = client.get("/painel", auth=("admin", "testpass"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("MUNICIPIO DE LAJEADO", resp.text)
+        self.assertIn(SAMPLE_ITEM["link"], resp.text)
+
+
 class DashboardTests(unittest.TestCase):
     def test_dashboard_requires_login(self):
         resp = client.get("/dashboard")

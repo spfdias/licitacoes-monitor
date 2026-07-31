@@ -81,6 +81,9 @@ async def fetch_publicacoes(data_inicial: date, data_final: date) -> list[dict]:
     return resultados
 
 
+SCAN_WINDOW_DAYS = 10  # janela de varredura por data de publicação
+
+
 def default_date_range() -> tuple[date, date]:
     today = date.today()
-    return today - timedelta(days=1), today
+    return today - timedelta(days=SCAN_WINDOW_DAYS), today

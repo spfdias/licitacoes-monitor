@@ -73,7 +73,8 @@ async def run_daily_check(evolution_url: str, evolution_key: str, instance: str,
 
     args = (evolution_url, evolution_key, instance, group_jid)
     alertas_30d = await _check_deadline_threshold(*args, "alerted_30d", 30, today)
-    alertas_5d = await _check_deadline_threshold(*args, "alerted_5d", 5, today)
+    alertas_20d = await _check_deadline_threshold(*args, "alerted_20d", 20, today)
+    alertas_10d = await _check_deadline_threshold(*args, "alerted_10d", 10, today)
     alertas_1d = await _check_deadline_threshold(*args, "alerted_1d", 1, today)
 
     return {
@@ -81,6 +82,7 @@ async def run_daily_check(evolution_url: str, evolution_key: str, instance: str,
         "relevantes": len(relevantes),
         "novas_alertadas": novas,
         "alertas_30d": alertas_30d,
-        "alertas_5d": alertas_5d,
+        "alertas_20d": alertas_20d,
+        "alertas_10d": alertas_10d,
         "alertas_1d": alertas_1d,
     }

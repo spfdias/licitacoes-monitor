@@ -40,16 +40,28 @@ def init_db():
                 first_seen_at TEXT NOT NULL,
                 alerted_new INTEGER NOT NULL DEFAULT 0,
                 alerted_30d INTEGER NOT NULL DEFAULT 0,
-                alerted_5d INTEGER NOT NULL DEFAULT 0,
+                alerted_20d INTEGER NOT NULL DEFAULT 0,
+                alerted_10d INTEGER NOT NULL DEFAULT 0,
                 alerted_1d INTEGER NOT NULL DEFAULT 0
             )"""
         )
         existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(licitacoes)")}
+        # 2026-07-31: coluna "alerted_20d" original foi renomeada para "alerted_30d".
         if "alerted_30d" not in existing_cols:
             if "alerted_20d" in existing_cols:
                 conn.execute("ALTER TABLE licitacoes RENAME COLUMN alerted_20d TO alerted_30d")
             else:
                 conn.execute("ALTER TABLE licitacoes ADD COLUMN alerted_30d INTEGER NOT NULL DEFAULT 0")
+            existing_cols.add("alerted_30d")
+        if "alerted_20d" not in existing_cols:
+            conn.execute("ALTER TABLE licitacoes ADD COLUMN alerted_20d INTEGER NOT NULL DEFAULT 0")
+            existing_cols.add("alerted_20d")
+        # 2026-07-31: coluna "alerted_5d" virou o limiar de 10 dias.
+        if "alerted_10d" not in existing_cols:
+            if "alerted_5d" in existing_cols:
+                conn.execute("ALTER TABLE licitacoes RENAME COLUMN alerted_5d TO alerted_10d")
+            else:
+                conn.execute("ALTER TABLE licitacoes ADD COLUMN alerted_10d INTEGER NOT NULL DEFAULT 0")
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:
@@ -109,7 +121,7 @@ def upsert_licitacao(item: dict, first_seen_at: str) -> bool:
         return True
 
 
-_ALERT_FLAGS = ("alerted_new", "alerted_30d", "alerted_5d", "alerted_1d")
+_ALERT_FLAGS = ("alerted_new", "alerted_30d", "alerted_20d", "alerted_10d", "alerted_1d")
 
 
 def mark_alerted(numero_controle_pncp: str, flag: str) -> None:
@@ -122,7 +134,7 @@ def mark_alerted(numero_controle_pncp: str, flag: str) -> None:
 
 
 def list_pending_deadline_alerts(flag: str) -> list[sqlite3.Row]:
-    assert flag in ("alerted_30d", "alerted_5d", "alerted_1d")
+    assert flag in ("alerted_30d", "alerted_20d", "alerted_10d", "alerted_1d")
     with get_conn() as conn:
         return conn.execute(
             f"SELECT * FROM licitacoes WHERE {flag} = 0 AND encerramento_proposta IS NOT NULL"

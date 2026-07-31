@@ -87,11 +87,11 @@ class DbTests(unittest.TestCase):
 
     def test_mark_alerted_and_pending_list(self):
         db.upsert_licitacao(SAMPLE_ITEM, first_seen_at="2026-07-30T10:00:00")
-        pending_before = [r["numero_controle_pncp"] for r in db.list_pending_deadline_alerts("alerted_5d")]
+        pending_before = [r["numero_controle_pncp"] for r in db.list_pending_deadline_alerts("alerted_10d")]
         self.assertIn(SAMPLE_ITEM["numero_controle_pncp"], pending_before)
 
-        db.mark_alerted(SAMPLE_ITEM["numero_controle_pncp"], "alerted_5d")
-        pending_after = [r["numero_controle_pncp"] for r in db.list_pending_deadline_alerts("alerted_5d")]
+        db.mark_alerted(SAMPLE_ITEM["numero_controle_pncp"], "alerted_10d")
+        pending_after = [r["numero_controle_pncp"] for r in db.list_pending_deadline_alerts("alerted_10d")]
         self.assertNotIn(SAMPLE_ITEM["numero_controle_pncp"], pending_after)
 
 
@@ -158,11 +158,34 @@ class RunDailyCheckTests(unittest.TestCase):
 
         result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
         self.assertEqual(result["alertas_30d"], 1)
-        self.assertEqual(result["alertas_5d"], 0)
+        self.assertEqual(result["alertas_20d"], 0)
+        self.assertEqual(result["alertas_10d"], 0)
 
         mock_send.reset_mock()
         result2 = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
         self.assertEqual(result2["alertas_30d"], 0)
+
+    @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
+    @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
+    def test_20d_and_10d_thresholds_fire_for_items_within_range(self, mock_fetch, mock_send):
+        # Thresholds are independent "<=N days" checks, not partitioned buckets, so an item
+        # can cross several at once the first time it's seen (e.g. 8 days out matches 30/20/10).
+        prazo_18 = (date.today() + timedelta(days=18)).isoformat() + "T09:00:00"
+        prazo_8 = (date.today() + timedelta(days=8)).isoformat() + "T09:00:00"
+        item_18 = {**SAMPLE_ITEM, "numero_controle_pncp": "item-18d", "encerramento_proposta": prazo_18}
+        item_8 = {**SAMPLE_ITEM, "numero_controle_pncp": "item-8d", "encerramento_proposta": prazo_8}
+        mock_fetch.return_value = [item_18, item_8]
+        import asyncio
+
+        try:
+            result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
+            self.assertEqual(result["alertas_30d"], 2)
+            self.assertEqual(result["alertas_20d"], 2)
+            self.assertEqual(result["alertas_10d"], 1)
+            self.assertEqual(result["alertas_1d"], 0)
+        finally:
+            with db.get_conn() as conn:
+                conn.execute("DELETE FROM licitacoes WHERE numero_controle_pncp IN ('item-18d','item-8d')")
 
 
 class PainelTests(unittest.TestCase):

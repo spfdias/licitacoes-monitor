@@ -121,7 +121,9 @@ class RunDailyCheckTests(unittest.TestCase):
     @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
     @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
     def test_new_relevant_item_triggers_one_alert(self, mock_fetch, mock_send):
-        mock_fetch.return_value = [SAMPLE_ITEM, {**SAMPLE_ITEM, "numero_controle_pncp": "irrelevante", "objeto": "compra de merenda escolar"}]
+        # Deadline far enough out (>20 days) that no threshold alert fires in the same run.
+        item = {**SAMPLE_ITEM, "encerramento_proposta": "2030-01-01T09:00:00"}
+        mock_fetch.return_value = [item, {**item, "numero_controle_pncp": "irrelevante", "objeto": "compra de merenda escolar"}]
 
         import asyncio
 
@@ -136,7 +138,8 @@ class RunDailyCheckTests(unittest.TestCase):
     @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
     @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
     def test_second_run_does_not_realert_same_item(self, mock_fetch, mock_send):
-        mock_fetch.return_value = [SAMPLE_ITEM]
+        item = {**SAMPLE_ITEM, "encerramento_proposta": "2030-01-01T09:00:00"}
+        mock_fetch.return_value = [item]
         import asyncio
 
         asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
@@ -144,6 +147,22 @@ class RunDailyCheckTests(unittest.TestCase):
         result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
 
         self.assertEqual(result["novas_alertadas"], 0)
+
+    @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
+    @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
+    def test_20d_deadline_alert_fires_once_within_window(self, mock_fetch, mock_send):
+        prazo = (date.today() + timedelta(days=15)).isoformat() + "T09:00:00"
+        item = {**SAMPLE_ITEM, "encerramento_proposta": prazo}
+        mock_fetch.return_value = [item]
+        import asyncio
+
+        result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
+        self.assertEqual(result["alertas_20d"], 1)
+        self.assertEqual(result["alertas_5d"], 0)
+
+        mock_send.reset_mock()
+        result2 = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
+        self.assertEqual(result2["alertas_20d"], 0)
 
 
 class PainelTests(unittest.TestCase):

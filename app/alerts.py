@@ -42,6 +42,19 @@ def _dias_restantes(encerramento_iso: str | None, today: date) -> int | None:
     return (datetime.fromisoformat(encerramento_iso).date() - today).days
 
 
+async def _check_deadline_threshold(
+    evolution_url: str, evolution_key: str, instance: str, group_jid: str, flag: str, max_dias: int, today: date
+) -> int:
+    enviados = 0
+    for row in db.list_pending_deadline_alerts(flag):
+        dias = _dias_restantes(row["encerramento_proposta"], today)
+        if dias is not None and 0 <= dias <= max_dias:
+            await evolution.send_text(evolution_url, evolution_key, instance, group_jid, format_deadline_alert(dict(row), dias))
+            db.mark_alerted(row["numero_controle_pncp"], flag)
+            enviados += 1
+    return enviados
+
+
 async def run_daily_check(evolution_url: str, evolution_key: str, instance: str, group_jid: str) -> dict:
     today = date.today()
     now_iso = datetime.now().isoformat()
@@ -58,26 +71,16 @@ async def run_daily_check(evolution_url: str, evolution_key: str, instance: str,
             db.mark_alerted(item["numero_controle_pncp"], "alerted_new")
             novas += 1
 
-    alertas_5d = 0
-    for row in db.list_pending_deadline_alerts("alerted_5d"):
-        dias = _dias_restantes(row["encerramento_proposta"], today)
-        if dias is not None and 0 <= dias <= 5:
-            await evolution.send_text(evolution_url, evolution_key, instance, group_jid, format_deadline_alert(dict(row), dias))
-            db.mark_alerted(row["numero_controle_pncp"], "alerted_5d")
-            alertas_5d += 1
-
-    alertas_1d = 0
-    for row in db.list_pending_deadline_alerts("alerted_1d"):
-        dias = _dias_restantes(row["encerramento_proposta"], today)
-        if dias is not None and 0 <= dias <= 1:
-            await evolution.send_text(evolution_url, evolution_key, instance, group_jid, format_deadline_alert(dict(row), dias))
-            db.mark_alerted(row["numero_controle_pncp"], "alerted_1d")
-            alertas_1d += 1
+    args = (evolution_url, evolution_key, instance, group_jid)
+    alertas_20d = await _check_deadline_threshold(*args, "alerted_20d", 20, today)
+    alertas_5d = await _check_deadline_threshold(*args, "alerted_5d", 5, today)
+    alertas_1d = await _check_deadline_threshold(*args, "alerted_1d", 1, today)
 
     return {
         "total_publicacoes": len(publicacoes),
         "relevantes": len(relevantes),
         "novas_alertadas": novas,
+        "alertas_20d": alertas_20d,
         "alertas_5d": alertas_5d,
         "alertas_1d": alertas_1d,
     }

@@ -39,10 +39,14 @@ def init_db():
                 link TEXT,
                 first_seen_at TEXT NOT NULL,
                 alerted_new INTEGER NOT NULL DEFAULT 0,
+                alerted_20d INTEGER NOT NULL DEFAULT 0,
                 alerted_5d INTEGER NOT NULL DEFAULT 0,
                 alerted_1d INTEGER NOT NULL DEFAULT 0
             )"""
         )
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(licitacoes)")}
+        if "alerted_20d" not in existing_cols:
+            conn.execute("ALTER TABLE licitacoes ADD COLUMN alerted_20d INTEGER NOT NULL DEFAULT 0")
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:
@@ -102,8 +106,11 @@ def upsert_licitacao(item: dict, first_seen_at: str) -> bool:
         return True
 
 
+_ALERT_FLAGS = ("alerted_new", "alerted_20d", "alerted_5d", "alerted_1d")
+
+
 def mark_alerted(numero_controle_pncp: str, flag: str) -> None:
-    assert flag in ("alerted_new", "alerted_5d", "alerted_1d")
+    assert flag in _ALERT_FLAGS
     with get_conn() as conn:
         conn.execute(
             f"UPDATE licitacoes SET {flag} = 1 WHERE numero_controle_pncp = ?",
@@ -112,7 +119,7 @@ def mark_alerted(numero_controle_pncp: str, flag: str) -> None:
 
 
 def list_pending_deadline_alerts(flag: str) -> list[sqlite3.Row]:
-    assert flag in ("alerted_5d", "alerted_1d")
+    assert flag in ("alerted_20d", "alerted_5d", "alerted_1d")
     with get_conn() as conn:
         return conn.execute(
             f"SELECT * FROM licitacoes WHERE {flag} = 0 AND encerramento_proposta IS NOT NULL"

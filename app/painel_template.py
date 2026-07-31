@@ -35,6 +35,8 @@ def render_painel(items: list[dict]) -> str:
   tr.urgente-1 td {{ background: rgba(239,68,68,0.12); }}
   tr.urgente-5 td {{ background: rgba(245,158,11,0.10); }}
   .uf {{ display:inline-block; background: var(--card); border:1px solid var(--border); border-radius:6px; padding:2px 8px; font-size:11px; color: var(--accent); }}
+  .uf.ro {{ border-color: var(--accent2); color: var(--accent2); font-weight:700; }}
+  tr.ro td {{ background: rgba(34,197,94,0.08); }}
   .val {{ color: var(--accent2); font-weight:600; white-space: nowrap; }}
   .obj {{ max-width: 480px; }}
   .prazo-1 {{ color: var(--danger); font-weight:700; }}
@@ -59,6 +61,7 @@ def render_painel(items: list[dict]) -> str:
   <div class="card"><div class="num" id="cValor">R$ 0</div><div class="lbl">valor estimado somado</div></div>
   <div class="card"><div class="num" id="cUF">0</div><div class="lbl">estados com oportunidades</div></div>
   <div class="card"><div class="num" id="cUrgente">0</div><div class="lbl">encerram em até 5 dias</div></div>
+  <div class="card"><div class="num" id="cRO">0</div><div class="lbl">licitações em Rondônia (RO)</div></div>
 </div>
 
 <div class="controls">
@@ -70,6 +73,7 @@ def render_painel(items: list[dict]) -> str:
     <option value="uf">Estado (A-Z)</option>
   </select>
   <button class="quickbtn" id="btnUrgente">Ver só as urgentes (&le;5 dias)</button>
+  <button class="quickbtn" id="btnRO">Ver só Rondônia (RO)</button>
 </div>
 
 <table>
@@ -116,10 +120,16 @@ document.getElementById('cTotal').textContent = DATA.length;
 document.getElementById('cValor').textContent = fmtMoeda(DATA.reduce((s,r)=>s+(r.valor_estimado||0),0));
 document.getElementById('cUF').textContent = ufs.length;
 document.getElementById('cUrgente').textContent = DATA.filter(r => {{ const d = diasRestantes(r.encerramento_proposta); return d !== null && d >= 0 && d <= 5; }}).length;
+document.getElementById('cRO').textContent = DATA.filter(r => r.uf === 'RO').length;
 
 let soUrgente = false;
+let soRO = false;
 document.getElementById('btnUrgente').addEventListener('click', () => {{
   soUrgente = !soUrgente;
+  render();
+}});
+document.getElementById('btnRO').addEventListener('click', () => {{
+  soRO = !soRO;
   render();
 }});
 
@@ -129,6 +139,7 @@ function render() {{
   const ord = document.getElementById('ordenar').value;
   let rows = DATA.filter(r => {{
     if (uf && r.uf !== uf) return false;
+    if (soRO && r.uf !== 'RO') return false;
     if (soUrgente) {{
       const d = diasRestantes(r.encerramento_proposta);
       if (d === null || d < 0 || d > 5) return false;
@@ -153,12 +164,13 @@ function render() {{
     const dias = diasRestantes(r.encerramento_proposta);
     const tr = document.createElement('tr');
     let prazoClass = '';
+    if (r.uf === 'RO') tr.className = 'ro';
     if (dias !== null && dias >= 0) {{
       if (dias <= 1) {{ tr.className = 'urgente-1'; prazoClass = 'prazo-1'; }}
       else if (dias <= 5) {{ tr.className = 'urgente-5'; prazoClass = 'prazo-5'; }}
     }}
     tr.innerHTML = `
-      <td><span class="uf">${{r.uf||'-'}}</span></td>
+      <td><span class="uf ${{r.uf === 'RO' ? 'ro' : ''}}">${{r.uf||'-'}}</span></td>
       <td>${{r.orgao||'-'}}<br><span style="color:var(--muted);font-size:11px">${{r.municipio||''}}</span></td>
       <td class="obj">${{r.objeto||'-'}}</td>
       <td class="val">${{fmtMoeda(r.valor_estimado)}}</td>

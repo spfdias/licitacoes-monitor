@@ -2,9 +2,8 @@ from datetime import date, datetime
 
 from . import db, evolution, matcher, pncp
 
-
-def _fmt_valor(valor: float) -> str:
-    return f"R$ {valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+_MAX_LINHAS_RESUMO = 10
+_DEADLINE_THRESHOLDS = (("alerted_30d", 30), ("alerted_20d", 20), ("alerted_10d", 10), ("alerted_1d", 1))
 
 
 def _fmt_data(iso_str: str | None) -> str:
@@ -13,49 +12,37 @@ def _fmt_data(iso_str: str | None) -> str:
     return datetime.fromisoformat(iso_str).strftime("%d/%m/%Y")
 
 
-def format_new_alert(item: dict) -> str:
-    return (
-        f"📢 *Nova licitação no escopo!*\n\n"
-        f"Órgão: {item['orgao']} ({item['municipio']}/{item['uf']})\n"
-        f"Objeto: {item['objeto']}\n"
-        f"Modalidade: {item['modalidade']}\n"
-        f"Valor estimado: {_fmt_valor(item['valor_estimado'])}\n"
-        f"Encerramento das propostas: {_fmt_data(item['encerramento_proposta'])}\n"
-        f"Link: {item['link']}"
-    )
-
-
-def format_deadline_alert(item: dict, dias: int) -> str:
-    urgencia = "🚨 *Encerra AMANHÃ!*" if dias <= 1 else f"⏰ *Encerra em {dias} dias*"
-    return (
-        f"{urgencia}\n\n"
-        f"Órgão: {item['orgao']} ({item['municipio']}/{item['uf']})\n"
-        f"Objeto: {item['objeto']}\n"
-        f"Encerramento das propostas: {_fmt_data(item['encerramento_proposta'])}\n"
-        f"Link: {item['link']}"
-    )
-
-
 def _dias_restantes(encerramento_iso: str | None, today: date) -> int | None:
     if not encerramento_iso:
         return None
     return (datetime.fromisoformat(encerramento_iso).date() - today).days
 
 
-async def _check_deadline_threshold(
-    evolution_url: str, evolution_key: str, instance: str, group_jid: str, flag: str, max_dias: int, today: date
-) -> int:
-    enviados = 0
-    for row in db.list_pending_deadline_alerts(flag):
-        dias = _dias_restantes(row["encerramento_proposta"], today)
-        if dias is not None and 0 <= dias <= max_dias:
-            await evolution.send_text(evolution_url, evolution_key, instance, group_jid, format_deadline_alert(dict(row), dias))
-            db.mark_alerted(row["numero_controle_pncp"], flag)
-            enviados += 1
-    return enviados
+def _resumo_linhas(items: list[dict], fmt_linha) -> str:
+    linhas = "\n".join(fmt_linha(i) for i in items[:_MAX_LINHAS_RESUMO])
+    if len(items) > _MAX_LINHAS_RESUMO:
+        linhas += f"\n… e mais {len(items) - _MAX_LINHAS_RESUMO}."
+    return linhas
 
 
-async def run_daily_check(evolution_url: str, evolution_key: str, instance: str, group_jid: str) -> dict:
+def format_new_digest(items: list[dict], painel_url: str) -> str:
+    linhas = _resumo_linhas(items, lambda i: f"• {i['orgao']} ({i['uf']}) — {i['objeto'][:80]}")
+    rodape = f"\n\nVeja todas no painel: {painel_url}" if painel_url else ""
+    return f"📢 *{len(items)} nova(s) licitação(ões) no escopo hoje*\n\n{linhas}{rodape}"
+
+
+def format_deadline_digest(items: list[tuple[dict, int]], painel_url: str) -> str:
+    ordenados = sorted(items, key=lambda par: par[1])
+    linhas = _resumo_linhas(
+        ordenados, lambda par: f"• {par[0]['orgao']} ({par[0]['uf']}) — vence em {par[1]}d ({_fmt_data(par[0]['encerramento_proposta'])})"
+    )
+    rodape = f"\n\nVeja todas no painel: {painel_url}" if painel_url else ""
+    return f"⏰ *{len(ordenados)} licitação(ões) próxima(s) do encerramento*\n\n{linhas}{rodape}"
+
+
+async def run_daily_check(
+    evolution_url: str, evolution_key: str, instance: str, group_jid: str, painel_url: str = ""
+) -> dict:
     today = date.today()
     now_iso = datetime.now().isoformat()
 
@@ -63,26 +50,36 @@ async def run_daily_check(evolution_url: str, evolution_key: str, instance: str,
     publicacoes = await pncp.fetch_publicacoes(data_inicial, data_final)
     relevantes = [item for item in publicacoes if matcher.matches_scope(item["objeto"])]
 
-    novas = 0
+    novos = []
     for item in relevantes:
-        is_new = db.upsert_licitacao(item, first_seen_at=now_iso)
-        if is_new:
-            await evolution.send_text(evolution_url, evolution_key, instance, group_jid, format_new_alert(item))
+        if db.upsert_licitacao(item, first_seen_at=now_iso):
             db.mark_alerted(item["numero_controle_pncp"], "alerted_new")
-            novas += 1
+            novos.append(item)
 
-    args = (evolution_url, evolution_key, instance, group_jid)
-    alertas_30d = await _check_deadline_threshold(*args, "alerted_30d", 30, today)
-    alertas_20d = await _check_deadline_threshold(*args, "alerted_20d", 20, today)
-    alertas_10d = await _check_deadline_threshold(*args, "alerted_10d", 10, today)
-    alertas_1d = await _check_deadline_threshold(*args, "alerted_1d", 1, today)
+    if novos:
+        await evolution.send_text(evolution_url, evolution_key, instance, group_jid, format_new_digest(novos, painel_url))
+
+    # Um item pode cruzar mais de um limiar no mesmo dia (ex: descoberto a 8 dias do prazo
+    # cruza 30d, 20d e 10d de uma vez) — mantemos só a ocorrência mais urgente no resumo.
+    prazos: dict[str, tuple[dict, int]] = {}
+    for flag, max_dias in _DEADLINE_THRESHOLDS:
+        for row in db.list_pending_deadline_alerts(flag):
+            dias = _dias_restantes(row["encerramento_proposta"], today)
+            if dias is None or not (0 <= dias <= max_dias):
+                continue
+            db.mark_alerted(row["numero_controle_pncp"], flag)
+            chave = row["numero_controle_pncp"]
+            if chave not in prazos or dias < prazos[chave][1]:
+                prazos[chave] = (dict(row), dias)
+
+    if prazos:
+        await evolution.send_text(
+            evolution_url, evolution_key, instance, group_jid, format_deadline_digest(list(prazos.values()), painel_url)
+        )
 
     return {
         "total_publicacoes": len(publicacoes),
         "relevantes": len(relevantes),
-        "novas_alertadas": novas,
-        "alertas_30d": alertas_30d,
-        "alertas_20d": alertas_20d,
-        "alertas_10d": alertas_10d,
-        "alertas_1d": alertas_1d,
+        "novas_alertadas": len(novos),
+        "prazos_alertados": len(prazos),
     }

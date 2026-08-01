@@ -102,15 +102,23 @@ class AlertsFormattingTests(unittest.TestCase):
         self.assertEqual(alerts._dias_restantes("2026-07-31T09:00:00", today), 1)
         self.assertIsNone(alerts._dias_restantes(None, today))
 
-    def test_format_new_alert_contains_key_fields(self):
-        text = alerts.format_new_alert(SAMPLE_ITEM)
+    def test_format_new_digest_summarizes_count_and_lists_items(self):
+        text = alerts.format_new_digest([SAMPLE_ITEM], "https://painel.example.com")
+        self.assertIn("1 nova", text)
         self.assertIn("MUNICIPIO DE LAJEADO", text)
-        self.assertIn("Lajeado", text)
-        self.assertIn(SAMPLE_ITEM["link"], text)
+        self.assertIn("https://painel.example.com", text)
 
-    def test_format_deadline_alert_marks_urgent_for_one_day(self):
-        text = alerts.format_deadline_alert(SAMPLE_ITEM, dias=1)
-        self.assertIn("AMANHÃ", text)
+    def test_format_new_digest_truncates_long_lists(self):
+        muitos = [{**SAMPLE_ITEM, "numero_controle_pncp": str(i)} for i in range(15)]
+        text = alerts.format_new_digest(muitos, "")
+        self.assertIn("15 nova", text)
+        self.assertIn("e mais 5", text)
+
+    def test_format_deadline_digest_sorts_by_urgency(self):
+        item_a = {**SAMPLE_ITEM, "numero_controle_pncp": "a"}
+        item_b = {**SAMPLE_ITEM, "numero_controle_pncp": "b"}
+        text = alerts.format_deadline_digest([(item_a, 10), (item_b, 1)], "")
+        self.assertLess(text.index("vence em 1d"), text.index("vence em 10d"))
 
 
 class RunDailyCheckTests(unittest.TestCase):
@@ -150,39 +158,45 @@ class RunDailyCheckTests(unittest.TestCase):
 
     @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
     @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
-    def test_30d_deadline_alert_fires_once_within_window(self, mock_fetch, mock_send):
+    def test_30d_deadline_produces_one_digest_message(self, mock_fetch, mock_send):
+        # Item já conhecido (não "novo" nesta execução), só o limiar de prazo deve disparar.
         prazo = (date.today() + timedelta(days=25)).isoformat() + "T09:00:00"
         item = {**SAMPLE_ITEM, "encerramento_proposta": prazo}
-        mock_fetch.return_value = [item]
+        db.upsert_licitacao(item, first_seen_at="2020-01-01T00:00:00")
+        db.mark_alerted(item["numero_controle_pncp"], "alerted_new")
+        mock_fetch.return_value = []
+
         import asyncio
 
         result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
-        self.assertEqual(result["alertas_30d"], 1)
-        self.assertEqual(result["alertas_20d"], 0)
-        self.assertEqual(result["alertas_10d"], 0)
+        self.assertEqual(result["prazos_alertados"], 1)
+        mock_send.assert_awaited_once()  # a única mensagem enviada é o resumo de prazos
 
         mock_send.reset_mock()
         result2 = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
-        self.assertEqual(result2["alertas_30d"], 0)
+        self.assertEqual(result2["prazos_alertados"], 0)
+        mock_send.assert_not_awaited()
 
     @patch("app.alerts.evolution.send_text", new_callable=AsyncMock)
     @patch("app.alerts.pncp.fetch_publicacoes", new_callable=AsyncMock)
-    def test_20d_and_10d_thresholds_fire_for_items_within_range(self, mock_fetch, mock_send):
-        # Thresholds are independent "<=N days" checks, not partitioned buckets, so an item
-        # can cross several at once the first time it's seen (e.g. 8 days out matches 30/20/10).
+    def test_item_crossing_multiple_thresholds_counted_once_in_digest(self, mock_fetch, mock_send):
+        # Um item a 8 dias do prazo cruza 30d, 20d e 10d ao mesmo tempo — o resumo deve contar
+        # essa licitação uma única vez (na urgência mais alta), não três.
         prazo_18 = (date.today() + timedelta(days=18)).isoformat() + "T09:00:00"
         prazo_8 = (date.today() + timedelta(days=8)).isoformat() + "T09:00:00"
         item_18 = {**SAMPLE_ITEM, "numero_controle_pncp": "item-18d", "encerramento_proposta": prazo_18}
         item_8 = {**SAMPLE_ITEM, "numero_controle_pncp": "item-8d", "encerramento_proposta": prazo_8}
-        mock_fetch.return_value = [item_18, item_8]
+        for item in (item_18, item_8):
+            db.upsert_licitacao(item, first_seen_at="2020-01-01T00:00:00")
+            db.mark_alerted(item["numero_controle_pncp"], "alerted_new")
+        mock_fetch.return_value = []
+
         import asyncio
 
         try:
             result = asyncio.run(alerts.run_daily_check("https://evo.example.com", "key", "inst", "grupo@g.us"))
-            self.assertEqual(result["alertas_30d"], 2)
-            self.assertEqual(result["alertas_20d"], 2)
-            self.assertEqual(result["alertas_10d"], 1)
-            self.assertEqual(result["alertas_1d"], 0)
+            self.assertEqual(result["prazos_alertados"], 2)  # 2 licitações distintas, não 5 cruzamentos
+            mock_send.assert_awaited_once()
         finally:
             with db.get_conn() as conn:
                 conn.execute("DELETE FROM licitacoes WHERE numero_controle_pncp IN ('item-18d','item-8d')")
@@ -232,16 +246,19 @@ class DashboardTests(unittest.TestCase):
 
     @patch("app.main.alerts.run_daily_check", new_callable=AsyncMock)
     def test_run_now_uses_configured_settings(self, mock_run):
-        mock_run.return_value = {"total_publicacoes": 10, "relevantes": 1, "novas_alertadas": 1, "alertas_5d": 0, "alertas_1d": 0}
+        mock_run.return_value = {"total_publicacoes": 10, "relevantes": 1, "novas_alertadas": 1, "prazos_alertados": 0}
         db.set_setting("evolution_api_url", "https://evo.example.com")
         db.set_setting("evolution_api_key", "key")
         db.set_setting("whatsapp_instance", "InstanciaWhatsapp")
         db.set_setting("group_jid", "grupo@g.us")
+        db.set_setting("painel_url", "https://painel.example.com")
 
         resp = client.post("/dashboard/run-now", auth=("admin", "testpass"))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["ran"], True)
-        mock_run.assert_awaited_once_with("https://evo.example.com", "key", "InstanciaWhatsapp", "grupo@g.us")
+        mock_run.assert_awaited_once_with(
+            "https://evo.example.com", "key", "InstanciaWhatsapp", "grupo@g.us", "https://painel.example.com"
+        )
 
     def test_run_now_without_config_reports_not_ran(self):
         db.set_setting("group_jid", "")

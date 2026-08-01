@@ -38,9 +38,10 @@ async def _run_check_now() -> dict:
     evolution_key = db.get_setting("evolution_api_key")
     instance = db.get_setting("whatsapp_instance")
     group_jid = db.get_setting("group_jid")
+    painel_url = db.get_setting("painel_url", "")
     if not (evolution_url and evolution_key and instance and group_jid):
         return {"ran": False, "reason": "configuracao incompleta"}
-    result = await alerts.run_daily_check(evolution_url, evolution_key, instance, group_jid)
+    result = await alerts.run_daily_check(evolution_url, evolution_key, instance, group_jid, painel_url)
     return {"ran": True, **result}
 
 
@@ -88,6 +89,7 @@ def dashboard(_: None = Depends(require_login)):
     whatsapp_instance = db.get_setting("whatsapp_instance", "")
     group_jid = db.get_setting("group_jid", "")
     check_time = db.get_setting("check_time", "07:00")
+    painel_url = db.get_setting("painel_url", "")
 
     body = f"""
     <fieldset>
@@ -103,6 +105,8 @@ def dashboard(_: None = Depends(require_login)):
         <input name="group_jid" value="{group_jid}">
         <label>Horário da checagem diária (HH:MM)</label>
         <input name="check_time" value="{check_time}">
+        <label>URL pública do painel (incluída nas mensagens do WhatsApp)</label>
+        <input name="painel_url" value="{painel_url}" placeholder="https://.../painel">
         <button class="btn" type="submit">Salvar</button>
       </form>
       <form method="post" action="/dashboard/run-now">
@@ -121,6 +125,7 @@ def save_settings(
     whatsapp_instance: str = Form(...),
     group_jid: str = Form(...),
     check_time: str = Form(...),
+    painel_url: str = Form(""),
     _: None = Depends(require_login),
 ):
     db.set_setting("evolution_api_url", evolution_api_url)
@@ -128,6 +133,7 @@ def save_settings(
     db.set_setting("whatsapp_instance", whatsapp_instance)
     db.set_setting("group_jid", group_jid)
     db.set_setting("check_time", check_time)
+    db.set_setting("painel_url", painel_url)
     return RedirectResponse("/dashboard", status_code=303)
 
 
